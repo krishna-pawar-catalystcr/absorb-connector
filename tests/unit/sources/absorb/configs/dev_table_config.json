@@ -1,0 +1,26 @@
+{
+    "users": {
+        "max_records_per_batch": "5"
+    },
+    "departments": {
+        "max_records_per_batch": "5"
+    },
+    "courses": {
+        "max_records_per_batch": "5"
+    },
+    "enrollments": {
+        "max_records_per_batch": "5"
+    },
+    "groups": {
+        "max_records_per_batch": "5"
+    },
+    "roles": {
+        "max_records_per_batch": "5"
+    },
+    "countries": {
+        "max_records_per_batch": "5"
+    },
+    "provinces": {
+        "max_records_per_batch": "5"
+    }
+}
