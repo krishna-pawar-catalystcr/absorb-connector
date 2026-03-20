@@ -273,6 +273,8 @@ PROVINCES_SCHEMA = StructType(
     [
         StructField("id", StringType(), True),
         StructField("name", StringType(), True),
+        StructField("countryId", StringType(), True),
+        StructField("countryName", StringType(), True),
     ]
 )
 

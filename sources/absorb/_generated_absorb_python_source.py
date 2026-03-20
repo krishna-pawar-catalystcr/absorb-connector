@@ -767,6 +767,8 @@ def register_lakeflow_source(spark):
         [
             StructField("id", StringType(), True),
             StructField("name", StringType(), True),
+            StructField("countryId", StringType(), True),
+            StructField("countryName", StringType(), True),
         ]
     )
 
@@ -976,7 +978,6 @@ def register_lakeflow_source(spark):
         ) -> tuple[Iterator[dict], dict]:
             """Read enrollments using user-scoped endpoint /users/{userId}/enrollments."""
             max_records = int(table_options.get("max_records_per_batch", "200"))
-            scope = table_options.get("enrollment_scope", "user")
 
             records = []
             user_offset = 0
@@ -1021,11 +1022,10 @@ def register_lakeflow_source(spark):
                         break
 
                 returned = data.get("returnedItems", len(users))
-                total = data.get("totalItems", 0)
-                if returned == 0 or user_offset + returned >= total:
+                if returned < user_limit:
                     break
 
-                user_offset += returned
+                user_offset += 1
 
             if not records:
                 return iter([]), start_offset or {}
@@ -1040,16 +1040,17 @@ def register_lakeflow_source(spark):
             """Full-refresh read with pagination."""
             records = []
             offset = 0
-            limit = 100
+            limit = 1000
 
             while True:
                 params: dict = {"_offset": str(offset), "_limit": str(limit)}
 
                 if table_name == "provinces":
                     country_id = table_options.get("country_id")
-                    if not country_id:
-                        return iter([]), {}
-                    params["countryId"] = country_id
+                    if country_id:
+                        params["countryId"] = country_id
+                    else:
+                        return self._read_all_provinces()
 
                 resp = self._request_with_retry("GET", f"/{table_name}", params=params)
 
@@ -1058,25 +1059,81 @@ def register_lakeflow_source(spark):
 
                 data = resp.json()
 
-                if table_name == "countries":
-                    items = data if isinstance(data, list) else []
+                if table_name in ("countries", "provinces"):
+                    items_key = self._get_items_key(table_name)
+                    if items_key and isinstance(data, dict):
+                        items = data.get(items_key, [])
+                    else:
+                        items = data if isinstance(data, list) else []
                 else:
                     items_key = self._get_items_key(table_name)
                     items = data.get(items_key, []) if isinstance(data, dict) else []
 
-                if not items:
-                    break
-
                 records.extend(items)
 
-                if isinstance(data, dict):
-                    returned = data.get("returnedItems", len(items))
-                    total = data.get("totalItems", 0)
-                    if returned == 0 or offset + returned >= total:
-                        break
-                    offset += returned
-                else:
+                if len(items) < limit:
                     break
+
+                offset += 1
+
+            return iter(records), {}
+
+        def _read_all_provinces(self) -> tuple[Iterator[dict], dict]:
+            """Read all provinces for all countries."""
+            records = []
+            country_offset = 0
+            country_limit = 1000
+
+            while True:
+                params = {"_offset": str(country_offset), "_limit": str(country_limit)}
+                resp = self._request_with_retry("GET", "/countries", params=params)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Failed to fetch countries: {resp.status_code} {resp.text}")
+
+                data = resp.json()
+                if isinstance(data, dict):
+                    countries = data.get("countries", [])
+                elif isinstance(data, list):
+                    countries = data
+                else:
+                    countries = []
+
+                if not countries:
+                    break
+
+                for country in countries:
+                    country_id = country.get("id")
+                    if not country_id:
+                        continue
+
+                    prov_offset = 0
+                    while True:
+                        prov_params = {"_offset": str(prov_offset), "_limit": "1000", "countryId": country_id}
+                        prov_resp = self._request_with_retry("GET", "/provinces", params=prov_params)
+                        if prov_resp.status_code != 200:
+                            break
+
+                        prov_data = prov_resp.json()
+                        if isinstance(prov_data, list):
+                            provinces = prov_data
+                        else:
+                            provinces = []
+
+                        if not provinces:
+                            break
+
+                        for prov in provinces:
+                            prov["countryId"] = country_id
+                            prov["countryName"] = country.get("name")
+                            records.append(prov)
+
+                        if len(provinces) < 1000:
+                            break
+                        prov_offset += 1
+
+                if len(countries) < country_limit:
+                    break
+                country_offset += 1
 
             return iter(records), {}
 
@@ -1087,24 +1144,20 @@ def register_lakeflow_source(spark):
             table_options: dict[str, str],
             cursor_field: str,
         ) -> tuple[Iterator[dict], dict]:
-            """Incremental read using dateEdited filter."""
+            """Incremental read using page-based pagination."""
             cursor = start_offset.get("cursor") if start_offset else None
 
             if cursor and cursor >= self._init_ts:
                 return iter([]), start_offset if start_offset else {}
 
             max_records = int(table_options.get("max_records_per_batch", "200"))
+            limit = 1000
 
             records = []
             offset = 0
-            limit = min(100, max_records)
 
             while len(records) < max_records:
                 params: dict = {"_offset": str(offset), "_limit": str(limit)}
-
-                if cursor:
-                    filter_expr = f"dateEdited ge datetime'{cursor}'"
-                    params["_filter"] = filter_expr
 
                 resp = self._request_with_retry("GET", f"/{table_name}", params=params)
 
@@ -1113,20 +1166,14 @@ def register_lakeflow_source(spark):
 
                 data = resp.json()
                 items_key = self._get_items_key(table_name)
-                items = data.get(items_key, [])
-
-                if not items:
-                    break
+                items = data.get(items_key, []) if isinstance(data, dict) else []
 
                 records.extend(items)
 
-                returned = data.get("returnedItems", len(items))
-                total = data.get("totalItems", 0)
-
-                if returned == 0 or offset + returned >= total:
+                if len(items) < limit:
                     break
 
-                offset += returned
+                offset += 1
 
             if not records:
                 return iter([]), start_offset or {}
@@ -1142,7 +1189,7 @@ def register_lakeflow_source(spark):
 
             return iter(records), end_offset
 
-        def _get_items_key(self, table_name: str) -> str:
+        def _get_items_key(self, table_name: str) -> str | None:
             """Get the key name for the items array in the response."""
             mapping = {
                 "users": "users",
@@ -1151,7 +1198,7 @@ def register_lakeflow_source(spark):
                 "enrollments": "enrollments",
                 "groups": "groups",
                 "roles": "roles",
-                "countries": None,
+                "countries": "countries",
                 "provinces": None,
             }
             return mapping.get(table_name, table_name)

@@ -6,7 +6,7 @@ This documentation provides setup instructions and reference information for the
 
 - An active Absorb LMS account with API access enabled
 - A private API key obtained from Absorb portal settings
-- An Absorb account with a username and password (for username/password authentication method)
+- An Absorb account with a username and password
 - Admin or appropriate permissions to access the Integration API
 
 ## Setup
@@ -19,10 +19,8 @@ To configure the connector, provide the following parameters in your connector o
 |-----------|----------|-------------|
 | `portal_url` | Yes | Absorb portal region. Must be one of: US, CA, EU, AU |
 | `private_api_key` | Yes | Private API key from Absorb portal settings |
-| `username` | Yes* | Absorb account username (for username/password authentication) |
-| `password` | Yes* | Absorb account password (for username/password authentication) |
-
-*Required when using the username/password authentication method.
+| `username` | Yes | Absorb account username |
+| `password` | Yes | Absorb account password |
 
 **Portal URL Options:**
 - US: `https://rest.myabsorb.com`
@@ -40,18 +38,16 @@ To configure the connector, provide the following parameters in your connector o
 
 2. **Portal URL:**
    - Identify your Absorb portal region (US, CA, EU, or AU) based on your account
-   - This determines which regional endpoint to use
 
 3. **Username/Password:**
    - Use your Absorb admin account credentials
-   - Alternatively, use API key-only authentication by providing just the `private_api_key`
 
 ### Create a Unity Catalog Connection
 
 A Unity Catalog connection for this connector can be created in two ways via the UI:
 1. Follow the Lakeflow Community Connector UI flow from the "Add Data" page
-2. Select any existing Lakeflow Community Connector connection for this source or create a new one.
-3. In the connection options, include `externalOptionsAllowList` with the value `max_records_per_batch, country_id` to enable table-specific options.
+2. Select any existing Lakeflow Community Connector connection for this source or create a new one
+3. Include `externalOptionsAllowList` with the value `max_records_per_batch, country_id` to enable table-specific options
 
 The connection can also be created using the standard Unity Catalog API.
 
@@ -59,16 +55,16 @@ The connection can also be created using the standard Unity Catalog API.
 
 The connector supports the following objects from Absorb LMS:
 
-| Object | Description | Primary Key |
-|--------|-------------|-------------|
-| `users` | Learner, instructor, admin, and manager user records | `id` |
-| `departments` | Organizational departments | `id` |
-| `courses` | Online courses, instructor-led courses, course bundles, curricula | `id` |
-| `enrollments` | User course enrollments | `id` |
-| `groups` | User groups | `id` |
-| `roles` | User roles | `id` |
-| `countries` | Country list | `id` |
-| `provinces` | Province/state list | `id` |
+| Object | Description | Primary Key | Ingestion Type |
+|--------|-------------|-------------|---------------|
+| `users` | Learner, instructor, admin, and manager user records | `id` | Incremental (CDC) |
+| `departments` | Organizational departments | `id` | Snapshot |
+| `courses` | Online courses, instructor-led courses, course bundles, curricula | `id` | Incremental (CDC) |
+| `enrollments` | User course enrollments | `id` | Incremental (CDC) |
+| `groups` | User groups | `id` | Snapshot |
+| `roles` | User roles | `id` | Snapshot |
+| `countries` | Country list | `id` | Snapshot |
+| `provinces` | Province/state list | `id` | Snapshot |
 
 ### Incremental Ingestion
 
@@ -78,18 +74,19 @@ The following objects support incremental (CDC) synchronization using the `dateE
 - **courses** - Tracks course content updates
 - **enrollments** - Tracks enrollment and completion status changes
 
-The remaining objects (departments, groups, roles, countries, provinces) use snapshot ingestion mode.
+The cursor field (`dateEdited`) is used to track changes between pipeline runs.
 
 ### Special Notes
 
 **Enrollments Table:**
 - Enrollments are fetched using the user-scoped endpoint `/users/{userId}/enrollments`
-- Each enrollment record includes the associated `userId` field
+- Each enrollment record includes the `userId` field linking to the user
 - The cursor tracks user changes for incremental sync
 
 **Provinces Table:**
-- Requires a `country_id` table option to filter provinces by country
-- The countries table can be used to retrieve valid country IDs
+- If `country_id` is provided, fetches provinces for that country only
+- If `country_id` is not provided, automatically fetches all provinces for all countries
+- Each province record includes `countryId` and `countryName` fields
 
 **Countries Table:**
 - Returns a flat list of all countries
@@ -113,7 +110,7 @@ These are set inside the `table_configuration` map alongside any source-specific
 
 | Option | Required | Description |
 |---|---|---|
-| `scd_type` | No | `SCD_TYPE_1` (default) or `SCD_TYPE_2`. Only applicable to tables with CDC or SNAPSHOT ingestion mode; APPEND_ONLY tables do not support this option. |
+| `scd_type` | No | `SCD_TYPE_1` (default) or `SCD_TYPE_2`. Only applicable to tables with CDC or SNAPSHOT ingestion mode |
 | `primary_keys` | No | List of columns to override the connector's default primary keys |
 | `sequence_by` | No | Column used to order records for SCD Type 2 change tracking |
 
@@ -123,13 +120,13 @@ These are set inside the `table_configuration` map alongside any source-specific
 
 | Option | Required | Description |
 |---|---|---|
-| `country_id` | Yes | The ID of the country to fetch provinces for. Use the countries table to find valid country IDs. |
+| `country_id` | No | The ID of the country to fetch provinces for. If not provided, all provinces for all countries are fetched |
 
 **For incremental tables (users, courses, enrollments):**
 
 | Option | Required | Description |
 |---|---|---|
-| `max_records_per_batch` | No | Maximum number of records to fetch per batch (default: 200). Adjust based on API rate limits. |
+| `max_records_per_batch` | No | Maximum number of records to fetch per batch (default: 200) |
 
 ## Data Type Mapping
 
@@ -153,17 +150,24 @@ Follow the Lakeflow Community Connector UI, which will guide you through setting
 1. Update the `pipeline_spec` in the main pipeline file (e.g., `ingest.py`).
 
 2. Configure your tables:
-```json
-{
-  "pipeline_spec": {
-      "connection_name": "my_absorb_connection",
-      "object": [
+```python
+pipeline_spec = {
+    "connection_name": "my_absorb_connection",
+    "objects": [
         {
             "table": {
                 "source_table": "users",
                 "table_configuration": {
                     "scd_type": "SCD_TYPE_2",
                     "sequence_by": "dateEdited"
+                }
+            }
+        },
+        {
+            "table": {
+                "source_table": "courses",
+                "table_configuration": {
+                    "max_records_per_batch": "500"
                 }
             }
         },
@@ -177,14 +181,20 @@ Follow the Lakeflow Community Connector UI, which will guide you through setting
         },
         {
             "table": {
-                "source_table": "provinces",
-                "table_configuration": {
-                    "country_id": "us"
-                }
+                "source_table": "departments"
+            }
+        },
+        {
+            "table": {
+                "source_table": "countries"
+            }
+        },
+        {
+            "table": {
+                "source_table": "provinces"
             }
         }
-      ]
-  }
+    ]
 }
 ```
 
@@ -198,6 +208,7 @@ Follow the Lakeflow Community Connector UI, which will guide you through setting
 - **Use Incremental Sync**: Reduces API calls and improves performance for tables that support CDC
 - **Set Appropriate Schedules**: Balance data freshness requirements with API usage limits
 - **Configure Batch Size**: Adjust `max_records_per_batch` based on your API rate limits and data volume
+- **Large Datasets**: For tables with thousands of records, incremental sync ensures only changed records are fetched
 
 #### Troubleshooting
 
@@ -207,8 +218,7 @@ Follow the Lakeflow Community Connector UI, which will guide you through setting
 |-------|-------|----------|
 | Authentication Failed (400) | Missing or invalid credentials | Verify username, password, and private API key are correct |
 | Authentication Failed (403) | Portal disabled or API access not enabled | Contact Absorb admin to enable API access |
-| No Data Returned | Incorrect table name or filter | Check source_table matches supported object names exactly |
-| Provinces Empty | Missing country_id | Provide `country_id` in table_configuration |
+| No Data Returned | Incorrect table name | Check source_table matches supported object names exactly |
 | Rate Limiting | Too many requests | Reduce `max_records_per_batch` or increase sync interval |
 
 ## References
