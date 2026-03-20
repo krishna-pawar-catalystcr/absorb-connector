@@ -1,0 +1,59 @@
+# Absorb LMS Community Connector Spec
+# This file defines the specification for the connector including
+# connection parameters and allowlist options.
+
+# ============================================================================
+# Connection Parameters
+# These are provided when creating the Unity Catalog connection.
+# ============================================================================
+connection:
+  parameters:
+    - name: portal_url
+      type: string
+      required: true
+      description: >
+        Absorb portal region. Must be one of: US, CA, EU, AU.
+        - US: https://rest.myabsorb.com
+        - CA: https://rest.myabsorb.ca
+        - EU: https://rest.myabsorb.eu
+        - AU: https://rest.myabsorb.com.au
+
+    - name: private_api_key
+      type: string
+      required: true
+      description: >
+        Private API key obtained from Absorb portal settings.
+        Used for both initial authentication and subsequent API requests.
+
+    - name: username
+      type: string
+      required: true
+      description: >
+        Absorb account username for authentication.
+
+    - name: password
+      type: string
+      required: true
+      description: >
+        Absorb account password for authentication.
+
+    - name: api_version
+      type: string
+      required: false
+      description: >
+        API version to use. Defaults to "2".
+
+    - name: verify_ssl
+      type: string
+      required: false
+      description: >
+        Whether to verify SSL certificates. Set to "false" for development
+        environments with self-signed certificates. Defaults to "true".
+
+# ============================================================================
+# External Options Allowlist
+# These table-specific options must be included in the externalOptionsAllowList
+# parameter of the UC connection to allow them to be passed through.
+# Use a comma-separated string of option names.
+# ============================================================================
+external_options_allowlist: "max_records_per_batch, country_id"
